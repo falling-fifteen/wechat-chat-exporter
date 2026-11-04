@@ -1,0 +1,333 @@
+"""Minimal Tkinter desktop UI for wechat-chat-exporter.
+
+Run with ``wce gui``.  The GUI is a thin layer over the same library used by
+the CLI: it never extracts keys and never opens a network socket.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import threading
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+from .crypto.key_source import load_image_key, load_key
+from .db.contacts import ContactResolver
+from .db.decrypt import DecryptedLayout, decrypt_layout, make_work_dir
+from .db.discovery import DataLayout, find_layout
+from .db.repository import MessageRepository
+from .export.naming import sanitize
+from .export.runner import export_session
+from .media.index import ImageIndex
+from .media.resolver import ImageResolver
+from .model.session import Session
+
+
+class ExportApp:
+    def __init__(self, root: tk.Tk, config: dict | None = None) -> None:
+        self.root = root
+        self.root.title("wechat-chat-exporter")
+        self.root.geometry("920x680")
+        self.root.minsize(820, 600)
+
+        self.config_data = config or {}
+        self.layout: DataLayout | None = None
+        self.decrypted: DecryptedLayout | None = None
+        self.work_dir: Path | None = None
+        self.repo: MessageRepository | None = None
+        self.sessions: dict[str, Session] = {}
+        self.busy = False
+
+        self.db_var = tk.StringVar(value=str(self.config_data.get("db_dir", "")))
+        self.key_var = tk.StringVar(value=str(self.config_data.get("key_file", "")))
+        self.out_var = tk.StringVar(
+            value=str(self.config_data.get("out", str(Path.home() / "wce-exports")))
+        )
+        self.limit_var = tk.StringVar(value=str(self.config_data.get("limit") or ""))
+        self.status_var = tk.StringVar(value="请选择微信数据目录和密钥文件")
+        configured = {
+            part.strip().lower()
+            for part in str(self.config_data.get("formats", "")).split(",")
+            if part.strip()
+        }
+        self.formats = {
+            name: tk.BooleanVar(
+                value=(name in configured) if configured else name in ("csv", "html")
+            )
+            for name in ("csv", "xlsx", "html", "pdf", "docx")
+        }
+        self.image_key_file = str(self.config_data.get("image_key_file", ""))
+
+        self._build()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ------------------------------------------------------------------ UI
+    def _build(self) -> None:
+        top = ttk.Frame(self.root)
+        top.pack(fill=tk.X, padx=10, pady=(10, 0))
+
+        self._path_row(top, 0, "微信数据目录", self.db_var, self._pick_db)
+        self._path_row(top, 1, "密钥文件", self.key_var, self._pick_key)
+        self._path_row(top, 2, "输出目录", self.out_var, self._pick_out)
+
+        actions = ttk.Frame(top)
+        actions.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.load_btn = ttk.Button(actions, text="读取会话", command=self.load_sessions)
+        self.load_btn.pack(side=tk.LEFT, padx=2)
+        ttk.Label(actions, text="最新条数（留空=全部）").pack(side=tk.LEFT, padx=(16, 4))
+        ttk.Entry(actions, textvariable=self.limit_var, width=10).pack(side=tk.LEFT)
+
+        mid = ttk.Frame(self.root)
+        mid.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+
+        cols = ("name", "count", "kind")
+        self.tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="extended")
+        self.tree.heading("name", text="会话")
+        self.tree.heading("count", text="条数")
+        self.tree.heading("kind", text="类型")
+        self.tree.column("name", width=560)
+        self.tree.column("count", width=100, anchor="e")
+        self.tree.column("kind", width=80, anchor="center")
+        scroll = ttk.Scrollbar(mid, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scroll.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        bottom = ttk.Frame(self.root)
+        bottom.pack(fill=tk.X, padx=10, pady=(0, 8))
+        ttk.Label(bottom, text="导出格式").pack(side=tk.LEFT)
+        for name, var in self.formats.items():
+            ttk.Checkbutton(bottom, text=name.upper(), variable=var).pack(side=tk.LEFT, padx=3)
+        self.export_btn = ttk.Button(bottom, text="开始导出", command=self.start_export)
+        self.export_btn.pack(side=tk.RIGHT, padx=2)
+        self.open_btn = ttk.Button(bottom, text="打开输出目录", command=self.open_output)
+        self.open_btn.pack(side=tk.RIGHT, padx=2)
+
+        self.progress = ttk.Progressbar(self.root, mode="indeterminate")
+        self.progress.pack(fill=tk.X, padx=10)
+        ttk.Label(self.root, textvariable=self.status_var, anchor="w").pack(
+            fill=tk.X, padx=10, pady=(4, 0)
+        )
+
+        log_frame = ttk.Frame(self.root)
+        log_frame.pack(fill=tk.BOTH, expand=False, padx=10, pady=(4, 10))
+        self.log = tk.Text(log_frame, height=7, state=tk.DISABLED, wrap=tk.WORD)
+        log_scroll = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self.log.yview)
+        self.log.configure(yscrollcommand=log_scroll.set)
+        self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _path_row(
+        self, parent: ttk.Frame, row: int, label: str, var: tk.StringVar, command
+    ) -> None:
+        ttk.Label(parent, text=label, width=12).grid(row=row, column=0, sticky="w", pady=3)
+        ttk.Entry(parent, textvariable=var).grid(row=row, column=1, sticky="ew", pady=3)
+        ttk.Button(parent, text="浏览", command=command, width=8).grid(
+            row=row, column=2, padx=(6, 0), pady=3
+        )
+        parent.columnconfigure(1, weight=1)
+
+    def _pick_db(self) -> None:
+        path = filedialog.askdirectory(title="选择 db_storage 或其上级目录")
+        if path:
+            self.db_var.set(path)
+
+    def _pick_key(self) -> None:
+        path = filedialog.askopenfilename(title="选择包含 64 位密钥的文件")
+        if path:
+            self.key_var.set(path)
+
+    def _pick_out(self) -> None:
+        path = filedialog.askdirectory(title="选择输出目录")
+        if path:
+            self.out_var.set(path)
+
+    # ------------------------------------------------------------- helpers
+    def _append_log(self, text: str) -> None:
+        self.log.configure(state=tk.NORMAL)
+        self.log.insert(tk.END, text + "\n")
+        self.log.see(tk.END)
+        self.log.configure(state=tk.DISABLED)
+
+    def _set_busy(self, busy: bool, text: str = "") -> None:
+        self.busy = busy
+        state = tk.DISABLED if busy else tk.NORMAL
+        self.load_btn.configure(state=state)
+        self.export_btn.configure(state=state)
+        if busy:
+            self.progress.start(12)
+        else:
+            self.progress.stop()
+        if text:
+            self.status_var.set(text)
+
+    def _cleanup_session(self) -> None:
+        if self.decrypted is not None:
+            self.decrypted.cleanup()
+            self.decrypted = None
+        if self.work_dir is not None:
+            shutil.rmtree(self.work_dir, ignore_errors=True)
+            self.work_dir = None
+
+    def _on_close(self) -> None:
+        self._cleanup_session()
+        self.root.destroy()
+
+    # --------------------------------------------------------------- load
+    def load_sessions(self) -> None:
+        if self.busy:
+            return
+        db_dir = self.db_var.get().strip()
+        key_file = self.key_var.get().strip()
+        if not db_dir or not key_file:
+            messagebox.showerror("缺少参数", "请先选择微信数据目录和密钥文件")
+            return
+        self._set_busy(True, "正在解密数据库并统计会话...")
+        self._cleanup_session()
+        threading.Thread(target=self._load_worker, args=(db_dir, key_file), daemon=True).start()
+
+    def _load_worker(self, db_dir: str, key_file: str) -> None:
+        try:
+            key = load_key(key_file, prompt=False)
+            layout = find_layout(db_dir)
+            work = make_work_dir()
+            decrypted = decrypt_layout(layout, key, work)
+            contacts = ContactResolver(decrypted.session_db, decrypted.contact_db)
+            repo = MessageRepository(decrypted, layout.account_wxid, contacts)
+            rows = []
+            for session in contacts.sessions():
+                count = repo.count(session.username)
+                if count:
+                    rows.append((session, count))
+            self.layout = layout
+            self.decrypted = decrypted
+            self.work_dir = work
+            self.repo = repo
+            self.root.after(0, lambda: self._show_sessions(rows))
+        except Exception as exc:  # surface a readable message
+            self.root.after(0, self._failed, str(exc))
+
+    def _show_sessions(self, rows: list[tuple[Session, int]]) -> None:
+        self.tree.delete(*self.tree.get_children())
+        self.sessions = {session.username: session for session, _ in rows}
+        for session, count in rows:
+            kind = "群" if session.is_group else "聊"
+            self.tree.insert(
+                "",
+                tk.END,
+                iid=session.username,
+                values=(session.display_name or session.username, count, kind),
+            )
+        self._set_busy(False, f"找到 {len(rows)} 个有消息的会话，请选择后导出")
+        self._append_log(f"会话加载完成：{len(rows)} 个")
+
+    def _failed(self, message: str) -> None:
+        self._set_busy(False, "失败")
+        self._append_log("错误: " + message)
+        messagebox.showerror("失败", message)
+
+    # ------------------------------------------------------------- export
+    def start_export(self) -> None:
+        if self.busy:
+            return
+        if self.repo is None or self.decrypted is None:
+            messagebox.showerror("还没有加载", "请先点击「读取会话」")
+            return
+        selected = list(self.tree.selection())
+        if not selected:
+            messagebox.showerror("没有选择", "请先选择一个或多个会话")
+            return
+        formats = [name for name, var in self.formats.items() if var.get()]
+        if not formats:
+            messagebox.showerror("没有格式", "请至少勾选一种导出格式")
+            return
+        out_dir = Path(self.out_var.get().strip() or "wce-exports")
+        limit = None
+        raw_limit = self.limit_var.get().strip()
+        if raw_limit:
+            try:
+                limit = int(raw_limit)
+                if limit <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror("条数无效", "最新条数必须是正整数，留空表示全部")
+                return
+        self._set_busy(True, f"正在导出 {len(selected)} 个会话...")
+        threading.Thread(
+            target=self._export_worker,
+            args=(selected, formats, out_dir, limit),
+            daemon=True,
+        ).start()
+
+    def _export_worker(
+        self, selected: list[str], formats: list[str], out_dir: Path, limit: int | None
+    ) -> None:
+        assert self.repo is not None
+        assert self.decrypted is not None
+        assert self.layout is not None
+        try:
+            image_key = load_image_key(self.image_key_file, self.layout.account_wxid)
+            resolver = ImageResolver(
+                ImageIndex(self.layout.attach_dir, self.layout.account_dir),
+                image_key,
+                mode="auto",
+            )
+            total = 0
+            for index, username in enumerate(selected, start=1):
+                session = self.sessions.get(username)
+                label = session.display_name if session else username
+                messages = list(self.repo.iter_messages(username, limit=limit, ascending=True))
+                for message in messages:
+                    resolver.resolve(message)
+                target = out_dir if len(selected) == 1 else out_dir / sanitize(label)
+                result = export_session(
+                    messages,
+                    out_dir=target,
+                    display_name=label,
+                    session_username=username,
+                    formats=formats,
+                    split="auto",
+                    tz=None,
+                    image_mode="auto",
+                    overwrite="force",
+                )
+                total += result.records
+                self.root.after(0, self._log_progress, index, len(selected), label, len(messages))
+            self.root.after(0, self._export_done, total, out_dir)
+        except Exception as exc:
+            self.root.after(0, self._failed, str(exc))
+
+    def _log_progress(self, index: int, total: int, name: str, count: int) -> None:
+        self._append_log(f"[{index}/{total}] {name}: {count} 条")
+
+    def _export_done(self, total: int, out_dir: Path) -> None:
+        self._set_busy(False, f"导出完成：{total} 条 → {out_dir}")
+        self._append_log(f"完成，共 {total} 条，输出目录: {out_dir}")
+        messagebox.showinfo("完成", f"已导出 {total} 条消息\n{out_dir}")
+
+    def open_output(self) -> None:
+        path = Path(self.out_var.get().strip() or "wce-exports")
+        path.mkdir(parents=True, exist_ok=True)
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(str(path))  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+        except OSError as exc:
+            messagebox.showerror("无法打开", str(exc))
+
+
+def main(config: dict | None = None) -> int:
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:  # e.g. no display
+        raise SystemExit(f"无法启动图形界面: {exc}") from exc
+    ExportApp(root, config=config)
+    root.mainloop()
+    return 0

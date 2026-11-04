@@ -112,6 +112,27 @@ wechat-chat-exporter validate --out out\chat --expect-count 107941
 
 短命令 `wce` 与 `wechat-chat-exporter` 等价。
 
+## 图形界面
+
+不想敲命令的话：
+
+```bash
+wce gui
+```
+
+界面里依次选择：
+
+1. 微信数据目录（`db_storage` 或其上级目录）
+2. 密钥文件
+3. 输出目录
+4. 点 **读取会话**，等列表加载
+5. 选中一个或多个会话，勾选格式
+6. 点 **开始导出**
+
+可选的「最新条数」留空表示导出全部。导出完成后会提示输出目录，也可以点
+**打开输出目录**。GUI 使用 Python 自带的 Tkinter；Linux 上如果缺失，安装
+`python3-tk` 即可。
+
 ## 密钥怎么提供
 
 密钥必须由你自己提供，工具不会去微信进程里读：

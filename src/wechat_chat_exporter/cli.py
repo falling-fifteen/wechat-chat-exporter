@@ -363,6 +363,15 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    from .config import CONFIG_NAME, load_config
+    from .gui import main as gui_main
+
+    path = args.config or (CONFIG_NAME if Path(CONFIG_NAME).is_file() else None)
+    data = load_config(path) if path else None
+    return gui_main(data)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wechat-chat-exporter",
@@ -416,6 +425,10 @@ def build_parser() -> argparse.ArgumentParser:
     init = sub.add_parser("init", help="交互式生成 wce.json")
     init.add_argument("--output", default=CONFIG_NAME, help="配置文件路径")
     init.set_defaults(func=cmd_init)
+
+    gui = sub.add_parser("gui", help="启动图形界面")
+    gui.add_argument("--config", help=f"JSON 配置文件（默认自动读取 ./{CONFIG_NAME}）")
+    gui.set_defaults(func=cmd_gui)
     return parser
 
 

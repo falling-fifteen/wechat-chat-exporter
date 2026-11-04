@@ -33,6 +33,16 @@ wechat-chat-exporter export --config wce.json
 
 ## 子命令
 
+### gui
+
+```bash
+wechat-chat-exporter gui
+wechat-chat-exporter gui --config wce.json
+```
+
+Tkinter 桌面界面：选择数据目录/密钥/输出目录 → 读取会话 → 选会话和格式 →
+开始导出。功能是 CLI 的子集，适合不想敲命令的场景。
+
 ### doctor
 
 检查数据目录、密钥、分片、WAL 和会话数量。不会写任何导出文件。
