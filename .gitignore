@@ -31,6 +31,7 @@ key*.txt
 *_key.json
 image_key.json
 image_key*.json
+wce.json
 .env
 tests/fixtures/private/
 
