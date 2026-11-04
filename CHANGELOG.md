@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- feat: `wce.json` 配置文件，所有路径/格式/会话只写一次
+- feat: `wce init` 交互式生成配置
+- feat: 不传 `--config` 时自动读取当前目录 `wce.json`；CLI 参数优先
+- docs: 明确所有路径都是参数，补充单命令导出示例
+
 ## 0.1.1
 
 - fix: SQLCipher 4 HMAC 输入格式（ciphertext + IV + 1-based LE 页号，第 0 页不含 salt）

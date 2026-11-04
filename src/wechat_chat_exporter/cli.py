@@ -11,6 +11,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import __version__
+from .config import CONFIG_NAME, apply_config, finalize_args
 from .crypto.key_source import load_image_key, load_key
 from .db.contacts import ContactResolver
 from .db.decrypt import decrypt_layout, make_work_dir
@@ -50,13 +51,21 @@ def _tz(name: str | None):
 
 
 def _common_paths(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--db-dir", required=True, help="微信 db_storage 目录或其上级目录")
+    parser.add_argument("--db-dir", help="微信 db_storage 目录或其上级目录")
     parser.add_argument("--key-file", help="包含 64 位数据库密钥的文件")
-    parser.add_argument("--key-stdin", action="store_true", help="从 stdin 读取密钥")
-    parser.add_argument("--strict-hmac", action="store_true", help="HMAC 校验失败即中止")
-    parser.add_argument("--keep-work", action="store_true", help="保留解密临时目录（含明文数据库）")
+    parser.add_argument("--config", help=f"JSON 配置文件（默认自动读取 ./{CONFIG_NAME}）")
+    parser.add_argument("--key-stdin", action="store_true", default=None, help="从 stdin 读取密钥")
+    parser.add_argument(
+        "--strict-hmac", action="store_true", default=None, help="HMAC 校验失败即中止"
+    )
+    parser.add_argument(
+        "--keep-work",
+        action="store_true",
+        default=None,
+        help="保留解密临时目录（含明文数据库）",
+    )
     parser.add_argument("--work-dir", help="指定临时工作目录")
-    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--verbose", action="store_true", default=None)
 
 
 def _load_key(args: argparse.Namespace) -> bytes:
@@ -324,6 +333,36 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0 if not problems else 4
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    def ask(prompt: str, default: str = "") -> str:
+        suffix = f" [{default}]" if default else ""
+        try:
+            value = input(f"{prompt}{suffix}: ").strip()
+        except EOFError as exc:
+            raise UsageError("交互输入不可用；请改用命令行参数") from exc
+        return value or default
+
+    print("生成 wce.json。直接回车使用默认值或跳过。")
+    data = {
+        "db_dir": ask("微信 db_storage 路径"),
+        "key_file": ask("密钥文件路径（可留空，运行时再输入）"),
+        "session": ask("会话 wxid / 备注名 / all", "all"),
+        "out": ask("导出目录", "./exports"),
+        "formats": ask("格式（逗号分隔）", "csv,html"),
+        "split": ask("拆分 auto/none/year/month", "auto"),
+        "image_mode": ask("图片模式 none/placeholder/auto/inline/file", "auto"),
+        "image_key_file": ask("image_key.json 路径（可留空）"),
+    }
+    if not data["db_dir"]:
+        raise UsageError("db_storage 路径不能为空")
+    output = Path(args.output)
+    payload = {key: value for key, value in data.items() if value}
+    output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"已写入 {output}")
+    print(f"下一步: wce export --config {output}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wechat-chat-exporter",
@@ -343,42 +382,49 @@ def build_parser() -> argparse.ArgumentParser:
 
     export = sub.add_parser("export", help="导出聊天记录")
     _common_paths(export)
-    export.add_argument("--session", required=True, help="wxid、备注名、all 或会话列表文件")
-    export.add_argument("--formats", default="csv,html", help="csv,xlsx,html,pdf,docx,jsonl")
-    export.add_argument("--out", required=True)
-    export.add_argument("--split", choices=["auto", "none", "year", "month"], default="auto")
+    export.add_argument("--session", help="wxid、备注名、all 或会话列表文件")
+    export.add_argument("--formats", help="csv,xlsx,html,pdf,docx,jsonl")
+    export.add_argument("--out", help="输出目录")
+    export.add_argument("--split", choices=["auto", "none", "year", "month"])
     export.add_argument("--limit", type=int, help="只导出最新 N 条")
     export.add_argument("--since", help="起始日期 YYYY-MM-DD")
     export.add_argument("--until", help="结束日期 YYYY-MM-DD（含当天）")
     export.add_argument("--timezone", help="如 Asia/Shanghai")
     export.add_argument("--me", help="自己的 wxid（默认从账号目录推导）")
-    export.add_argument("--label-me", default="我")
-    export.add_argument("--exclude-system", action="store_true", help="不导出系统消息")
+    export.add_argument("--label-me")
+    export.add_argument(
+        "--exclude-system", action="store_true", default=None, help="不导出系统消息"
+    )
     export.add_argument(
         "--image-mode",
         choices=["none", "placeholder", "auto", "inline", "file"],
-        default="auto",
     )
     export.add_argument("--image-key-file", help="可选 image_key.json")
     export.add_argument("--pdf-font", help="PDF 使用的中文字体文件")
-    export.add_argument("--overwrite", choices=["skip", "force", "ask"], default="skip")
+    export.add_argument("--overwrite", choices=["skip", "force", "ask"])
     export.add_argument("--strict-wal", action="store_true", help="存在 WAL 时直接失败")
     export.add_argument("--dry-run", action="store_true", help="只统计，不写文件")
     export.set_defaults(func=cmd_export)
 
     validate = sub.add_parser("validate", help="校验导出结果")
-    validate.add_argument("--out", required=True)
+    validate.add_argument("--out")
+    validate.add_argument("--config", help=f"JSON 配置文件（默认自动读取 ./{CONFIG_NAME}）")
     validate.add_argument("--expect-count", type=int)
     validate.add_argument("--json", action="store_true")
     validate.set_defaults(func=cmd_validate)
+
+    init = sub.add_parser("init", help="交互式生成 wce.json")
+    init.add_argument("--output", default=CONFIG_NAME, help="配置文件路径")
+    init.set_defaults(func=cmd_init)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    setup_logging(getattr(args, "verbose", False))
     try:
+        args = finalize_args(apply_config(args))
+        setup_logging(getattr(args, "verbose", False))
         return int(args.func(args))
     except UsageError as exc:
         parser.error(str(exc))

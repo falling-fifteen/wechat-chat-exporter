@@ -1,0 +1,9 @@
+{
+  "db_dir": "D:/WeChat Files/xwechat_files/wxid_xxx_c872/db_storage",
+  "key_file": "D:/keys/wechat.key",
+  "session": "all",
+  "out": "D:/exports/wechat",
+  "formats": "csv,html,pdf,docx",
+  "split": "month",
+  "image_mode": "auto"
+}

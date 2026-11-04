@@ -7,6 +7,6 @@ try:  # pragma: no cover - trivial
 
     __version__ = version("wechat-chat-exporter")
 except Exception:  # pragma: no cover - editable/source tree
-    __version__ = "0.1.1"
+    __version__ = "0.1.2"
 
 __all__ = ["__version__"]

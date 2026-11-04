@@ -1,5 +1,36 @@
 # 使用说明
 
+所有路径都是显式参数（`--db-dir`、`--out`、`--key-file`、`--image-key-file`、
+`--work-dir`、`--pdf-font`），代码中没有写死用户目录。为了少敲几遍，可以把它们
+写进 `wce.json`。
+
+## 配置文件
+
+```bash
+wechat-chat-exporter init          # 交互式生成 wce.json
+wechat-chat-exporter export --config wce.json
+```
+
+`wce.json` 示例（见仓库根目录 `wce.example.json`）：
+
+```json
+{
+  "db_dir": "D:/WeChat Files/xwechat_files/wxid_xxx_c872/db_storage",
+  "key_file": "D:/keys/wechat.key",
+  "session": "all",
+  "out": "D:/exports/wechat",
+  "formats": "csv,html,pdf,docx",
+  "split": "month",
+  "image_mode": "auto"
+}
+```
+
+规则：
+
+- 命令行参数优先级高于配置文件。
+- 不传 `--config` 时，如果当前目录有 `wce.json` 会自动读取。
+- 配置文件只保存**密钥文件路径**，不保存密钥本身。
+
 ## 子命令
 
 ### doctor

@@ -58,16 +58,40 @@ python -m venv .venv
 
 ## 快速开始
 
+所有路径都是参数，代码里没有写死任何用户目录。最省事的方式是先把路径写进
+`wce.json`，之后一条命令就能导出：
+
 ```bash
-# 1. 体检：验证密钥、列出分片、检测未 checkpoint 的 WAL
+# 交互式生成配置（只问一次路径）
+wechat-chat-exporter init
+
+# 之后只需要这一条
+wechat-chat-exporter export --config wce.json
+```
+
+也可以把它当成普通 CLI，用参数直接指定：
+
+```bash
+wechat-chat-exporter export ^
+  --db-dir "D:\WeChat Files\xwechat_files\wxid_xxx_c872\db_storage" ^
+  --key-file key.txt ^
+  --session all ^
+  --formats csv,html,pdf,docx ^
+  --out out\chat
+```
+
+`doctor` 和 `sessions` 是可选的诊断工具：
+
+```bash
+# 体检：验证密钥、列出分片、检测未 checkpoint 的 WAL
 wechat-chat-exporter doctor ^
   --db-dir "D:\WeChat Files\xwechat_files\wxid_xxx_c872\db_storage" ^
   --key-file key.txt
 
-# 2. 列出有消息的会话
+# 列出有消息的会话
 wechat-chat-exporter sessions --db-dir ... --key-file key.txt
 
-# 3. 导出单个会话的全部消息
+# 单个会话全量，五种格式，按月拆分
 wechat-chat-exporter export ^
   --db-dir ... --key-file key.txt ^
   --session wxid_xxx ^
@@ -75,14 +99,14 @@ wechat-chat-exporter export ^
   --split month ^
   --out out\chat
 
-# 4. 只导出最近 5000 条，或某个日期范围
+# 只导出最近 5000 条，或某个日期范围
 wechat-chat-exporter export ... --limit 5000
 wechat-chat-exporter export ... --since 2025-01-01 --until 2025-12-31
 
-# 5. 批量导出全部会话
+# 批量导出全部会话
 wechat-chat-exporter export ... --session all --formats csv,html --out out\all
 
-# 6. 校验结果
+# 校验结果
 wechat-chat-exporter validate --out out\chat --expect-count 107941
 ```
 
