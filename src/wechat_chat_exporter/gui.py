@@ -15,6 +15,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from . import __version__
 from .crypto.key_source import load_image_key, load_key, validate_key_hex
 from .db.contacts import ContactResolver
 from .db.decrypt import DecryptedLayout, decrypt_layout, make_work_dir
@@ -30,7 +31,7 @@ from .model.session import Session
 class ExportApp:
     def __init__(self, root: tk.Tk, config: dict | None = None) -> None:
         self.root = root
-        self.root.title("wechat-chat-exporter")
+        self.root.title(f"wechat-chat-exporter v{__version__}")
         self.root.geometry("920x680")
         self.root.minsize(820, 600)
 
@@ -98,6 +99,9 @@ class ExportApp:
             side=tk.LEFT, padx=2
         )
         ttk.Button(actions, text="数据目录说明", command=self._show_data_help).pack(
+            side=tk.LEFT, padx=2
+        )
+        ttk.Button(actions, text="使用说明 / Q&A", command=self._show_faq).pack(
             side=tk.LEFT, padx=2
         )
         ttk.Label(actions, text="最新条数（留空=全部）").pack(side=tk.LEFT, padx=(16, 4))
@@ -252,6 +256,95 @@ class ExportApp:
             "详细说明见项目里的 docs/getting-key.md。\n\n"
             "请勿使用来历不明的程序，也不要用它读取他人的聊天记录。",
         )
+
+    def _show_faq(self) -> None:
+        win = tk.Toplevel(self.root)
+        win.title("使用说明 / Q&A")
+        win.geometry("780x640")
+        frame = ttk.Frame(win)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text = tk.Text(
+            frame,
+            wrap=tk.WORD,
+            padx=12,
+            pady=10,
+            font=("Microsoft YaHei", 10),
+            spacing1=2,
+            spacing3=6,
+        )
+        scroll = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        text.insert("1.0", self._faq_text())
+        text.configure(state=tk.DISABLED)
+
+    @staticmethod
+    def _faq_text() -> str:
+        return f"""wechat-chat-exporter v{__version__} 使用说明
+
+【支持版本】
+- 已在 Windows 11 + 微信 4.2.0.11 上完整验证（单会话 107,985 条）
+- 其他微信 4.x 尽力兼容；微信 3.x 不支持
+- 微信升级后数据库结构或密钥机制可能变化。如果读取失败，先看下方日志，
+  或运行 wce doctor 获取更详细的诊断信息。
+
+【第一次使用】
+1. 微信数据目录：选择 db_storage 文件夹，或它上一级的 wxid_ 文件夹。
+   不知道在哪：微信左下角 设置 → 文件管理 → 打开文件夹 → xwechat_files。
+   也可以直接点「自动查找数据目录」。
+2. 密钥：选择 key.txt，或把 64 位密钥直接粘贴到「或直接粘贴 64 位密钥」。
+3. 输出目录：导出文件放哪里。
+4. 点「读取会话」，等待解密和统计完成。
+5. 在列表里选中一个或多个会话，勾选需要的格式。
+6. 点「开始导出」。完成后可以点「打开输出目录」。
+
+【常见问题】
+Q: 微信数据目录到底指什么？
+A: 微信把聊天记录存在一个叫 db_storage 的文件夹里。它通常在
+   文档\\xwechat_files\\<你的wxid>\\db_storage。选择 db_storage 或
+   wxid_ 文件夹都可以。
+
+Q: 密钥是什么？我没有。
+A: 数据库是加密的，需要 32 字节（64 个十六进制字符）的密钥。它不是微信
+   登录密码。本工具不自动从微信进程提取密钥；可以使用已有的 key.txt、
+   直接粘贴密钥，或使用你自己信任的工具在本人设备上导出。
+   详见 docs/getting-key.md。
+
+Q: 为什么别的工具只能导出 2400 条？
+A: 那是依赖 DLL 的旧工具的单次查询上限。本工具直接解密所有
+   message_*.db 分片并在 SQLite 里合并，不受该限制。
+
+Q: 图片为什么显示为 [图片]？
+A: 图片文件可能不在本地，或需要账号级 image key。工具会先尝试消息里的
+   aeskey；失败时用占位符，不会中断导出。WXGF/WxAM 等格式暂不完整支持。
+
+Q: 语音、视频、表情包会导出吗？
+A: 目前只输出 [语音]/[视频]/[表情] 占位，不解码媒体内容。
+
+Q: 群聊发送者为什么显示 wxid？
+A: 群昵称解析是尽力而为：优先 contact.db 的备注/昵称，解析不到就显示 wxid。
+
+Q: 提示 WAL 未 checkpoint 怎么办？
+A: 说明微信还开着，最新消息可能还在 WAL 里。建议退出微信后重新导出。
+
+Q: 导出文件在哪里？怎么核对？
+A: 在输出目录；多会话时每个会话一个子目录。manifest.json 记录条数、
+   文件大小和 SHA-256。也可以用 wce validate --out 目录 校验。
+
+Q: 数据会上传到网上吗？
+A: 不会。完全本地处理，无网络请求、无遥测。导出的 CSV/PDF/Word 是明文，
+   请自行加密保管，不要上传到公开仓库或网盘。
+
+Q: 失败了怎么办？
+A: 先看界面下方日志；可以运行 wce doctor。反馈问题时不要附带密钥、
+   聊天正文、数据库文件或完整个人路径。
+
+【注意事项】
+- 仅用于导出你本人或已获得明确授权的数据。
+- 工具不会修改微信数据库，但请先退出微信以获得一致的快照。
+- 导出他人聊天内容可能违反法律、平台条款和聊天参与者隐私。
+"""
 
     # ------------------------------------------------------------- helpers
     def _append_log(self, text: str) -> None:
