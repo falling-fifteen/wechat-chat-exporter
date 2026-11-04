@@ -15,7 +15,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .crypto.key_source import load_image_key, load_key
+from .crypto.key_source import load_image_key, load_key, validate_key_hex
 from .db.contacts import ContactResolver
 from .db.decrypt import DecryptedLayout, decrypt_layout, make_work_dir
 from .db.discovery import DataLayout, find_layout
@@ -44,11 +44,13 @@ class ExportApp:
 
         self.db_var = tk.StringVar(value=str(self.config_data.get("db_dir", "")))
         self.key_var = tk.StringVar(value=str(self.config_data.get("key_file", "")))
+        self.paste_var = tk.StringVar()
+        self.show_key_var = tk.BooleanVar(value=False)
         self.out_var = tk.StringVar(
             value=str(self.config_data.get("out", str(Path.home() / "wce-exports")))
         )
         self.limit_var = tk.StringVar(value=str(self.config_data.get("limit") or ""))
-        self.status_var = tk.StringVar(value="请选择微信数据目录和密钥文件")
+        self.status_var = tk.StringVar(value="请选择微信数据目录，并提供密钥（文件或直接粘贴）")
         configured = {
             part.strip().lower()
             for part in str(self.config_data.get("formats", "")).split(",")
@@ -74,12 +76,44 @@ class ExportApp:
         self._path_row(top, 1, "密钥文件", self.key_var, self._pick_key)
         self._path_row(top, 2, "输出目录", self.out_var, self._pick_out)
 
+        ttk.Label(top, text="或直接粘贴 64 位密钥", width=16).grid(
+            row=3, column=0, sticky="w", pady=3
+        )
+        self.key_entry = ttk.Entry(top, textvariable=self.paste_var, show="•")
+        self.key_entry.grid(row=3, column=1, sticky="ew", pady=3)
+        key_tools = ttk.Frame(top)
+        key_tools.grid(row=3, column=2, sticky="w", padx=(6, 0))
+        ttk.Checkbutton(
+            key_tools, text="显示", variable=self.show_key_var, command=self._toggle_key
+        ).pack(side=tk.LEFT)
+        ttk.Button(key_tools, text="说明", command=self._show_key_help, width=5).pack(
+            side=tk.LEFT, padx=(4, 0)
+        )
+
         actions = ttk.Frame(top)
-        actions.grid(row=3, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        actions.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
         self.load_btn = ttk.Button(actions, text="读取会话", command=self.load_sessions)
         self.load_btn.pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions, text="自动查找数据目录", command=self._auto_find_db).pack(
+            side=tk.LEFT, padx=2
+        )
+        ttk.Button(actions, text="数据目录说明", command=self._show_data_help).pack(
+            side=tk.LEFT, padx=2
+        )
         ttk.Label(actions, text="最新条数（留空=全部）").pack(side=tk.LEFT, padx=(16, 4))
         ttk.Entry(actions, textvariable=self.limit_var, width=10).pack(side=tk.LEFT)
+
+        ttk.Label(
+            self.root,
+            text=(
+                "数据目录一般位于「文档\\xwechat_files\\<你的wxid>\\db_storage」，"
+                "也可以在微信左下角 设置 → 文件管理 → 打开文件夹 找到 xwechat_files。"
+                "选择 db_storage 或它的上级目录都可以。"
+            ),
+            foreground="#666",
+            wraplength=880,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, padx=10, pady=(6, 0))
 
         mid = ttk.Frame(self.root)
         mid.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
@@ -146,6 +180,79 @@ class ExportApp:
         if path:
             self.out_var.set(path)
 
+    def _toggle_key(self) -> None:
+        self.key_entry.configure(show="" if self.show_key_var.get() else "•")
+
+    def _auto_find_db(self) -> None:
+        home = Path.home()
+        roots = [
+            home / "Documents" / "xwechat_files",
+            home / "Documents" / "WeChat Files",
+            home / "OneDrive" / "Documents" / "xwechat_files",
+            home / "OneDrive" / "Documents" / "WeChat Files",
+        ]
+        for drive in "CDEFGH":
+            roots.append(Path(f"{drive}:/WeChat Files/xwechat_files"))
+            roots.append(Path(f"{drive}:/WeChat Files/WeChat Files"))
+            roots.append(Path(f"{drive}:/xwechat_files"))
+        found: list[Path] = []
+        for root in roots:
+            if not root.is_dir():
+                continue
+            if (root / "db_storage").is_dir() and root not in found:
+                found.append(root)
+            try:
+                for child in root.iterdir():
+                    if child.is_dir() and (child / "db_storage").is_dir() and child not in found:
+                        found.append(child)
+            except OSError:
+                continue
+        if len(found) == 1:
+            self.db_var.set(str(found[0]))
+            self.status_var.set("已自动找到数据目录，请确认后读取会话")
+        elif found:
+            listing = "\n".join(str(path) for path in found[:10])
+            messagebox.showinfo(
+                "找到多个数据目录",
+                "找到多个微信账号目录，请手动选择其中一个：\n\n" + listing,
+            )
+        else:
+            messagebox.showinfo(
+                "没有找到",
+                "没有在常见位置找到 db_storage。\n\n"
+                "请打开微信：左下角 设置 → 文件管理 → 打开文件夹，"
+                "进入 xwechat_files 后选择 wxid_ 开头的账号目录。",
+            )
+
+    def _show_data_help(self) -> None:
+        messagebox.showinfo(
+            "微信数据目录是什么",
+            "微信把聊天记录、联系人和图片存在一个叫 db_storage 的文件夹里。\n\n"
+            "怎么找：\n"
+            "1. 打开微信电脑版\n"
+            "2. 左下角 设置 → 文件管理 → 打开文件夹\n"
+            "3. 进入 xwechat_files\n"
+            "4. 里面通常有一个 wxid_ 开头的文件夹\n"
+            "5. 进入后能看到 db_storage 文件夹\n\n"
+            "在本工具里选择 db_storage，或者选择它上一级的 wxid_ 文件夹，"
+            "两种都可以。\n\n"
+            "如果你改过微信的存储位置，以 设置 → 文件管理 里显示的路径为准。",
+        )
+
+    def _show_key_help(self) -> None:
+        messagebox.showinfo(
+            "什么是数据库密钥",
+            "微信的聊天数据库是加密的，需要一串 64 位的十六进制密钥才能读取。\n\n"
+            "它不是你的微信登录密码，也不是手机号。\n\n"
+            "本工具不会从微信进程里自动提取密钥。你可以：\n"
+            "1. 如果之前用可信工具导出过 key.txt，直接选择该文件；\n"
+            "2. 如果你手里已经有 64 位密钥，直接粘贴到输入框；\n"
+            "3. 如果两者都没有，需要先用你信任的密钥导出工具，"
+            "在你自己拥有并授权的设备上取得密钥。\n\n"
+            "详细说明见项目里的 docs/getting-key.md。\n\n"
+            "请勿使用来历不明的程序，也不要用它读取他人的聊天记录。",
+        )
+
     # ------------------------------------------------------------- helpers
     def _append_log(self, text: str) -> None:
         self.log.configure(state=tk.NORMAL)
@@ -183,16 +290,21 @@ class ExportApp:
             return
         db_dir = self.db_var.get().strip()
         key_file = self.key_var.get().strip()
-        if not db_dir or not key_file:
-            messagebox.showerror("缺少参数", "请先选择微信数据目录和密钥文件")
+        pasted_key = self.paste_var.get().strip()
+        if not db_dir or (not key_file and not pasted_key):
+            messagebox.showerror("缺少参数", "请先选择微信数据目录，并提供密钥文件或直接粘贴密钥")
             return
         self._set_busy(True, "正在解密数据库并统计会话...")
         self._cleanup_session()
-        threading.Thread(target=self._load_worker, args=(db_dir, key_file), daemon=True).start()
+        threading.Thread(
+            target=self._load_worker,
+            args=(db_dir, key_file, pasted_key),
+            daemon=True,
+        ).start()
 
-    def _load_worker(self, db_dir: str, key_file: str) -> None:
+    def _load_worker(self, db_dir: str, key_file: str, pasted_key: str) -> None:
         try:
-            key = load_key(key_file, prompt=False)
+            key = validate_key_hex(pasted_key) if pasted_key else load_key(key_file, prompt=False)
             layout = find_layout(db_dir)
             work = make_work_dir()
             decrypted = decrypt_layout(layout, key, work)

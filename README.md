@@ -151,6 +151,9 @@ wechat-chat-exporter export ... --key-stdin
 
 命令行**不接受**明文 `--key` 参数，日志和错误信息也会自动脱敏。
 
+GUI 里除了选择密钥文件，也可以直接把 64 位密钥粘贴到输入框，不需要先建文件。
+如果你还没有密钥，请先看 [docs/getting-key.md](docs/getting-key.md)。
+
 ## 图片密钥（可选）
 
 图片 `.dat` 有时需要账号级 image key。工具会先尝试消息 XML 里的 `aeskey`；

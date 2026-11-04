@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- feat(gui): 数据目录说明文字 + 「自动查找数据目录」按钮
+- feat(gui): 支持直接粘贴 64 位密钥，不再强制要求密钥文件
+- feat(gui): 密钥说明弹窗，解释密钥是什么、如何获得
+- docs: 新增 `docs/getting-key.md`
+
 ## 0.2.0
 
 - feat: `wce gui` Tkinter 桌面界面
