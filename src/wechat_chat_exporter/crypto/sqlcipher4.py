@@ -53,9 +53,17 @@ def derive_keys(key: bytes, salt: bytes) -> tuple[bytes, bytes]:
     return enc_key, mac_key
 
 
+def hmac_input(page: bytes, pgno: int) -> bytes:
+    """HMAC input: ciphertext + IV + little-endian 1-based page number.
+
+    Page 0 additionally excludes its 16-byte plaintext salt prefix.
+    """
+    body = page[SALT_SIZE:-HMAC_SIZE] if pgno == 0 else page[:-HMAC_SIZE]
+    return body + struct.pack("<I", pgno + 1)
+
+
 def page_hmac(page: bytes, pgno: int, mac_key: bytes) -> bytes:
-    """HMAC over the ciphertext part of a page plus its page number."""
-    return hmac.new(mac_key, page[:-HMAC_SIZE] + struct.pack("<I", pgno), hashlib.sha512).digest()
+    return hmac.new(mac_key, hmac_input(page, pgno), hashlib.sha512).digest()
 
 
 def _validate_header(dec0: bytes) -> None:

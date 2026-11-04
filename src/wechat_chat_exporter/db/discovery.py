@@ -57,7 +57,9 @@ def find_layout(db_dir: str | Path) -> DataLayout:
     db_storage = _normalize(db_dir)
     message_dir = db_storage / "message"
     shards = sorted(
-        p for p in message_dir.glob("message_*.db") if p.is_file() and p.suffix == ".db"
+        p
+        for p in message_dir.glob("message_*.db")
+        if p.is_file() and re.fullmatch(r"message_\d+\.db", p.name)
     )
     if not shards:
         raise UnsupportedSchemaError(f"没有找到 message_*.db: {message_dir}")

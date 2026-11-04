@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wechat-chat-exporter"
-version = "0.1.0"
+version = "0.1.1"
 description = "Export full WeChat 4.x chat history from your own local databases to CSV / Excel / HTML / PDF / Word."
 readme = "README.md"
 requires-python = ">=3.10"

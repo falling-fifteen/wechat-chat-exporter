@@ -21,37 +21,56 @@ SALT = bytes(range(16))
 SQLITE_FCNTL_RESERVE_BYTES = 38
 
 
+def _configure(lib: ctypes.CDLL) -> ctypes.CDLL:
+    lib.sqlite3_open.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
+    lib.sqlite3_open.restype = ctypes.c_int
+    lib.sqlite3_close.argtypes = [ctypes.c_void_p]
+    lib.sqlite3_close.restype = ctypes.c_int
+    lib.sqlite3_file_control.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+    ]
+    lib.sqlite3_file_control.restype = ctypes.c_int
+    lib.sqlite3_exec.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_char_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_char_p),
+    ]
+    lib.sqlite3_exec.restype = ctypes.c_int
+    return lib
+
+
 def _sqlite_lib() -> ctypes.CDLL:
-    candidates = []
+    paths: list[Path] = []
+    names: list[str] = []
     if sys.platform == "win32":
-        candidates.append(Path(sys.base_prefix) / "DLLs" / "sqlite3.dll")
-        candidates.append(Path(sys.prefix) / "DLLs" / "sqlite3.dll")
+        paths.extend(
+            [
+                Path(sys.base_prefix) / "DLLs" / "sqlite3.dll",
+                Path(sys.prefix) / "DLLs" / "sqlite3.dll",
+            ]
+        )
+        names.append("sqlite3.dll")
     found = ctypes.util.find_library("sqlite3")
     if found:
-        candidates.append(Path(found))
-    for path in candidates:
-        if path and Path(path).exists():
-            lib = ctypes.CDLL(str(path))
-            lib.sqlite3_open.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_void_p)]
-            lib.sqlite3_open.restype = ctypes.c_int
-            lib.sqlite3_close.argtypes = [ctypes.c_void_p]
-            lib.sqlite3_close.restype = ctypes.c_int
-            lib.sqlite3_file_control.argtypes = [
-                ctypes.c_void_p,
-                ctypes.c_char_p,
-                ctypes.c_int,
-                ctypes.c_void_p,
-            ]
-            lib.sqlite3_file_control.restype = ctypes.c_int
-            lib.sqlite3_exec.argtypes = [
-                ctypes.c_void_p,
-                ctypes.c_char_p,
-                ctypes.c_void_p,
-                ctypes.c_void_p,
-                ctypes.POINTER(ctypes.c_char_p),
-            ]
-            lib.sqlite3_exec.restype = ctypes.c_int
-            return lib
+        paths.append(Path(found))
+    names.extend(["libsqlite3.so.0", "libsqlite3.so", "libsqlite3.dylib"])
+
+    for path in paths:
+        if path and path.exists():
+            try:
+                return _configure(ctypes.CDLL(str(path)))
+            except OSError:
+                continue
+    for name in names:
+        try:
+            return _configure(ctypes.CDLL(name))
+        except OSError:
+            continue
     raise RuntimeError("找不到 sqlite3 动态库，无法生成测试夹具")
 
 
@@ -85,7 +104,7 @@ def create_plain_db(path: Path, statements: list[str], *, page_size: int = PAGE)
 
 
 def encrypt_db(plain: Path, out: Path, key: bytes, *, seed: int = 0) -> None:
-    from wechat_chat_exporter.crypto.sqlcipher4 import derive_keys
+    from wechat_chat_exporter.crypto.sqlcipher4 import derive_keys, hmac_input
 
     data = plain.read_bytes()
     if len(data) % PAGE:
@@ -98,9 +117,9 @@ def encrypt_db(plain: Path, out: Path, key: bytes, *, seed: int = 0) -> None:
     def hmac_for(block: bytes, pgno: int) -> bytes:
         import hashlib
         import hmac
-        import struct
 
-        return hmac.new(mac_key, block + struct.pack("<I", pgno), hashlib.sha512).digest()
+        full_page = block + b"\x00" * 64
+        return hmac.new(mac_key, hmac_input(full_page, pgno), hashlib.sha512).digest()
 
     with out.open("wb") as fh:
         for pgno in range(pages):

@@ -23,6 +23,8 @@
 - 其他页: `[ciphertext 4016][IV 16][HMAC 64]`
 - 派生：`enc_key = PBKDF2-HMAC-SHA512(key, salt, 256000, 32)`
 - HMAC key：`PBKDF2-HMAC-SHA512(enc_key, salt ^ 0x3a, 2, 32)`
+- HMAC 输入：`ciphertext + IV + LE32(page_number)`，其中页号从 **1** 开始；
+  第 0 页不包含开头的 16 字节 salt。算法为 HMAC-SHA512，取完整 64 字节。
 
 解密时每页补回 80 字节 reserve 区，保证 SQLite 页对齐。
 
